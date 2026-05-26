@@ -19,17 +19,24 @@ def get_employees(
     db: Session,
     department: Optional[str] = None,
     search: Optional[str] = None,
-    is_active: bool = True,
+    is_active: Optional[bool] = True,
     page: int = 1,
     page_size: int = 200,
 ):
-    """Get paginated list of employees with balances."""
+    """Get paginated list of employees with balances.
+
+    is_active:
+      - True  → solo activos (por defecto)
+      - False → solo inactivos
+      - None  → todos (activos + inactivos)
+    """
     query = (
         db.query(Employee)
         .join(Department)
         .options(joinedload(Employee.department))
-        .filter(Employee.IsActive == is_active)
     )
+    if is_active is not None:
+        query = query.filter(Employee.IsActive == is_active)
 
     if department:
         query = query.filter(Department.Name == department)
@@ -348,9 +355,26 @@ def get_projection(db: Session, year: int = 2026):
         )
 
         monthly = {}
+        vac_segments = []
         for v in vacations:
-            month = v.StartDate.month
-            monthly[month] = monthly.get(month, Decimal("0")) + v.Days
+            start_month = v.StartDate.month
+            # Si la vacación se cruza al año siguiente, recortamos al año proyectado
+            end_month = v.EndDate.month if v.EndDate.year == year else 12
+            # Mapa por mes (compat — sigue mostrando totales mensuales)
+            monthly[start_month] = monthly.get(start_month, Decimal("0")) + v.Days
+            vac_segments.append({
+                "VacationId": v.Id,
+                "StartMonth": start_month,
+                "EndMonth": end_month,
+                "StartDate": v.StartDate,
+                "EndDate": v.EndDate,
+                "Days": v.Days,
+                "Label": v.Label,
+                "Status": v.Status,
+            })
+
+        # Ordenar por fecha de inicio para que el render sea determinista
+        vac_segments.sort(key=lambda s: s["StartDate"])
 
         results.append({
             "EmployeeId": emp.Id,
@@ -359,6 +383,7 @@ def get_projection(db: Session, year: int = 2026):
             "Position": emp.Position,
             "TotalPending": balance.TotalPending if balance else Decimal("0"),
             "MonthlySchedule": monthly,
+            "Vacations": vac_segments,
         })
 
     return results

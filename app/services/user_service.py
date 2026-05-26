@@ -8,7 +8,10 @@ from app.schemas.schemas import UserCreate, UserUpdate
 from app.auth.security import hash_password, verify_password
 
 
-VALID_ROLES = {"admin", "gestor"}
+VALID_ROLES = {"admin", "gestor", "trabajador"}
+# admin     -> Administrador de Sistema (acceso total, gestion de usuarios)
+# gestor    -> Gestor de RRHH (gestion de empleados, vacaciones, recordatorios)
+# trabajador-> Trabajador (vista de su propia info)
 
 
 def _validate_role(role: str):

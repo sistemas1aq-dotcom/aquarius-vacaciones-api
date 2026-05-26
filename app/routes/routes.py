@@ -40,12 +40,16 @@ def list_departments(db: Session = Depends(get_db)):
 def list_employees(
     department: Optional[str] = None,
     search: Optional[str] = None,
+    includeInactive: bool = Query(False, description="Si es True devuelve también empleados inactivos"),
     page: int = Query(1, ge=1),
     pageSize: int = Query(200, ge=1, le=500),
     db: Session = Depends(get_db),
 ):
+    # is_active=None => todos | True => solo activos
+    is_active_filter = None if includeInactive else True
     items, total = employee_service.get_employees(
-        db, department=department, search=search, page=page, page_size=pageSize
+        db, department=department, search=search,
+        is_active=is_active_filter, page=page, page_size=pageSize
     )
     return {
         "items": items,

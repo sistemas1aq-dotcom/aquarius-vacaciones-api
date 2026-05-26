@@ -161,7 +161,9 @@ def create_reminder(db: Session, employee_id: int, reminder_type: str,
 
 
 def get_reminders(db: Session, page: int = 1, page_size: int = 100):
-    """Get paginated reminder history."""
+    """Get paginated reminder history (includes employee's current pending days)."""
+    from app.models.models import VacationBalance
+
     query = (
         db.query(VacationReminder)
         .join(Employee)
@@ -173,6 +175,13 @@ def get_reminders(db: Session, page: int = 1, page_size: int = 100):
     results = []
     for r in items:
         emp = db.query(Employee).filter(Employee.Id == r.EmployeeId).first()
+        # Latest vacation balance snapshot (current pending days)
+        balance = (
+            db.query(VacationBalance)
+            .filter(VacationBalance.EmployeeId == r.EmployeeId)
+            .order_by(VacationBalance.CalculationDate.desc())
+            .first()
+        )
         results.append({
             "Id": r.Id,
             "EmployeeId": r.EmployeeId,
@@ -184,6 +193,9 @@ def get_reminders(db: Session, page: int = 1, page_size: int = 100):
             "SentAt": r.SentAt,
             "Status": r.Status,
             "CreatedAt": r.CreatedAt,
+            "TotalPending": float(balance.TotalPending) if balance else 0,
+            "PendingByYear": float(balance.PendingByYear) if balance else 0,
+            "PendingTruncated": float(balance.PendingTruncated) if balance else 0,
         })
 
     return results, total

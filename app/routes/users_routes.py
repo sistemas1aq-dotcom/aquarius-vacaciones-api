@@ -22,7 +22,7 @@ users_router = APIRouter(
 @users_router.get("", response_model=list[UserResponse])
 def list_users(
     is_active: Optional[bool] = None,
-    role: Optional[str] = Query(None, description="admin | gestor"),
+    role: Optional[str] = Query(None, description="admin | gestor | trabajador"),
     search: Optional[str] = None,
     db: Session = Depends(get_db),
 ):

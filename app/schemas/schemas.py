@@ -128,6 +128,9 @@ class ReminderResponse(BaseModel):
     SentAt: Optional[datetime]
     Status: str
     CreatedAt: datetime
+    TotalPending: Optional[float] = 0
+    PendingByYear: Optional[float] = 0
+    PendingTruncated: Optional[float] = 0
     class Config:
         from_attributes = True
 
@@ -224,7 +227,7 @@ class UserCreate(BaseModel):
     Email: EmailStr
     FullName: str
     Password: str
-    Role: str = "gestor"   # "admin" o "gestor"
+    Role: str = "gestor"   # "admin" | "gestor" | "trabajador"
     IsActive: bool = True
 
 class UserUpdate(BaseModel):

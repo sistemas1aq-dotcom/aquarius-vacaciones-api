@@ -53,13 +53,19 @@ app = FastAPI(
 )
 
 # CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.cors_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Si APP_CORS_ORIGINS=* abrimos a cualquier origen via regex (compatible con allow_credentials=True;
+# el navegador rechaza '*' literal cuando hay credenciales, asi que reflejamos el Origin real).
+_cors_kwargs = {
+    "allow_credentials": True,
+    "allow_methods": ["*"],
+    "allow_headers": ["*"],
+}
+if settings.cors_origins == ["*"]:
+    _cors_kwargs["allow_origin_regex"] = ".*"
+else:
+    _cors_kwargs["allow_origins"] = settings.cors_origins
+
+app.add_middleware(CORSMiddleware, **_cors_kwargs)
 
 # Register routes
 app.include_router(auth_router)
