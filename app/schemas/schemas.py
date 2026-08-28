@@ -141,6 +141,11 @@ class EmailDraft(BaseModel):
     Subject: str
     Body: str
     SendNow: bool = False
+    # Opcionales: si vienen, el envío queda registrado en VacationReminders
+    # igual que los recordatorios automáticos. Sin ellos el correo sale pero
+    # no deja rastro, que es como estaba antes.
+    EmployeeId: Optional[int] = None
+    ReminderType: Optional[str] = None   # hr_meeting | extension | custom
 
 
 # ─── Dashboard ───────────────────────────────────────────────────

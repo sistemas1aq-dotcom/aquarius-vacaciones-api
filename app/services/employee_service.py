@@ -117,7 +117,8 @@ def get_employee_detail(db: Session, employee_id: int):
 
     # Recalculate balance
     db.execute(
-        text("SELECT sp_calculate_vacation_balance(:emp_id, :calc_date)"),
+        text("EXEC dbo.sp_calculate_vacation_balance "
+             "@p_employee_id = :emp_id, @p_calculation_date = :calc_date"),
         {"emp_id": employee_id, "calc_date": date.today()},
     )
     db.commit()
@@ -223,7 +224,7 @@ def get_dashboard_data(db: Session):
 
     # Recalculate all balances
     db.execute(
-        text("SELECT sp_recalculate_all_balances(:calc_date)"),
+        text("EXEC dbo.sp_recalculate_all_balances @p_calculation_date = :calc_date"),
         {"calc_date": today_date},
     )
     db.commit()
@@ -282,24 +283,62 @@ def get_dashboard_data(db: Session):
         .all()
     )
 
-    # Employees without scheduled vacations and +15 pending
-    no_prog_count = 0
-    for b in balances:
-        if b.TotalPending > 15:
-            has_future = (
-                db.query(Vacation)
-                .filter(
-                    Vacation.EmployeeId == b.EmployeeId,
-                    Vacation.Status.in_(["approved"]),
-                    Vacation.StartDate > today_date,
-                )
-                .first()
-            )
-            if not has_future:
-                no_prog_count += 1
+    # Sin programar: mas de 15 dias pendientes y ninguna vacacion futura
+    # aprobada.
+    #
+    # Antes esto lanzaba UNA consulta por empleado dentro del bucle. Con 110
+    # trabajadores eran 110 viajes a la base cada vez que alguien abria el
+    # dashboard. Ahora se traen de golpe los que si tienen algo programado y
+    # se comprueba contra un conjunto en memoria.
+    con_futuras = {
+        fila[0] for fila in db.query(Vacation.EmployeeId)
+        .filter(Vacation.Status == "approved", Vacation.StartDate > today_date)
+        .distinct()
+        .all()
+    }
+    sin_programar = [b for b in balances
+                     if b.TotalPending > 15 and b.EmployeeId not in con_futuras]
 
-    # Advanced
-    advanced = [b for b in balances if b.TotalPending < 0]
+    # Adelantos: saldo NEGATIVO, es decir, gozo mas dias de los generados.
+    # Se calculaba desde siempre y no se pintaba en ninguna parte.
+    advanced = sorted([b for b in balances if b.TotalPending < 0],
+                      key=lambda b: b.TotalPending)
+
+    # Truncos: derecho en formacion. Desde que dejaron de sumarse al
+    # pendiente no aparecen en ninguna pantalla, pero se pagan al cesar: son
+    # dinero que la empresa debe y que hoy no esta mirando nadie.
+    truncos = sorted([b for b in balances if b.PendingTruncated > 0],
+                     key=lambda b: b.PendingTruncated, reverse=True)
+    truncos_total = sum(b.PendingTruncated for b in truncos)
+
+    # Sin correo registrado: a esta gente NO se le puede avisar por ninguna
+    # via, ni automatica ni manual. Es la lista mas accionable del tablero.
+    sin_correo = (
+        db.query(Employee)
+        .join(Department, Employee.DepartmentId == Department.Id)
+        .filter(Employee.IsActive == True,  # noqa: E712
+        func.coalesce(func.ltrim(func.rtrim(Employee.Email)), "") == "")
+        .order_by(Employee.FullName)
+        .all()
+    )
+
+    # Correos fallidos del ultimo mes: salud del envio. Si el relay se cae o
+    # un buzon deja de existir, hoy no se entera nadie hasta entrar a
+    # Recordatorios.
+    from app.models.models import VacationReminder
+    desde_correos = today_date - timedelta(days=30)
+    correos_fallidos = (
+        db.query(VacationReminder)
+        .filter(VacationReminder.Status == "failed",
+                VacationReminder.ReminderDate >= desde_correos)
+        .order_by(VacationReminder.ReminderDate.desc())
+        .all()
+    )
+
+    # Pico de ausencias del proximo mes: cuanta gente coincide fuera el dia
+    # de mayor solape. Es la pregunta de planificacion que ninguna pantalla
+    # responde -- el mapa de calor la tiene delante pero no la resume.
+    pico = _pico_ausencias(db, today_date)
 
     return {
         "stats": {
@@ -307,7 +346,12 @@ def get_dashboard_data(db: Session):
             "OnVacation": in_progress,
             "TotalPendingDays": total_pending,
             "CriticalAlerts": len(critical),
-            "NoProgrammed": no_prog_count,
+            "NoProgrammed": len(sin_programar),
+            "TruncatedDays": truncos_total,
+            "NoEmail": len(sin_correo),
+            "FailedEmails": len(correos_fallidos),
+            "PeakNextMonth": pico["total"],
+            "PeakDate": pico["fecha"],
         },
         "critical": critical,
         "pending_30": pending_30,
@@ -315,7 +359,52 @@ def get_dashboard_data(db: Session):
         "next_return": next_return,
         "in_progress": in_prog_list,
         "advanced": advanced,
+        "sin_programar": sin_programar,
+        "truncos": truncos,
+        # Los que componen la suma de "Dias Pendientes": el numero grande
+        # sin la lista detras no se puede auditar.
+        "pendientes": sorted([b for b in balances if b.TotalPending > 0],
+                             key=lambda b: b.TotalPending, reverse=True),
+        "sin_correo": sin_correo,
+        "correos_fallidos": correos_fallidos,
+        "pico": pico,
         "balances": {b.EmployeeId: b for b in balances},
+    }
+
+
+def _pico_ausencias(db, hoy):
+    """Dia del proximo mes con mas gente de vacaciones a la vez.
+
+    Se recorren los dias del mes contando cuantas vacaciones lo cubren. Con
+    31 dias y unas decenas de vacaciones el coste es irrelevante, y evita
+    tener que explicar una consulta de solapamientos en SQL.
+    """
+    inicio = (hoy.replace(day=1) + timedelta(days=32)).replace(day=1)
+    fin = (inicio + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+
+    vacaciones = (
+        db.query(Vacation)
+        .join(Employee)
+        .filter(Vacation.Status.in_(["approved", "in_progress"]),
+                Vacation.StartDate <= fin,
+                Vacation.EndDate >= inicio)
+        .all()
+    )
+
+    mejor_dia, mejor = inicio, []
+    dia = inicio
+    while dia <= fin:
+        hoy_fuera = [v for v in vacaciones if v.StartDate <= dia <= v.EndDate]
+        if len(hoy_fuera) > len(mejor):
+            mejor_dia, mejor = dia, hoy_fuera
+        dia += timedelta(days=1)
+
+    return {
+        "fecha": mejor_dia.isoformat() if mejor else None,
+        "total": len(mejor),
+        "vacaciones": mejor,
+        "desde": inicio.isoformat(),
+        "hasta": fin.isoformat(),
     }
 
 

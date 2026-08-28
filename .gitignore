@@ -1,2 +1,34 @@
+# --- Entorno virtual (nunca va al repositorio) ---
+.venv/
+venv/
+env/
+
+# --- Cache de Python ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# --- Secretos: NUNCA versionar ---
+# Todo .env queda fuera; la unica excepcion es la plantilla de ejemplo.
+.env
+.env.*
+!.env.example
+*.env.bak
+
+# --- Editor / SO ---
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# --- Despliegue ---
 .vercel
-.env*.local
+
+# --- Logs y temporales ---
+*.log
+logs/
+*.db
+*.sqlite3

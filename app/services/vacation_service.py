@@ -95,10 +95,11 @@ def extend_vacation(db: Session, vacation_id: int, extra_days: int, notes: str =
 
 
 def _recalculate_balance(db: Session, employee_id: int):
-    """Recalculate vacation balance via PostgreSQL function."""
+    """Recalculate vacation balance via SQL Server stored procedure."""
     try:
         db.execute(
-            text("SELECT sp_calculate_vacation_balance(:emp_id, :calc_date)"),
+            text("EXEC dbo.sp_calculate_vacation_balance "
+                 "@p_employee_id = :emp_id, @p_calculation_date = :calc_date"),
             {"emp_id": employee_id, "calc_date": date.today()},
         )
         db.commit()
@@ -143,8 +144,16 @@ def get_employees_needing_reminders(db: Session, threshold_days: int = 30):
 
 
 def create_reminder(db: Session, employee_id: int, reminder_type: str,
-                    email_to: str, subject: str, body: str) -> VacationReminder:
-    """Create a reminder record."""
+                    email_to: str, subject: str, body: str,
+                    status: str = "pending", sent_at=None,
+                    error: str | None = None) -> VacationReminder:
+    """Registra un recordatorio con su resultado real.
+
+    `status`, `sent_at` y `error` existían en la tabla pero NADIE los
+    escribía: todos los recordatorios quedaban en "pending" para siempre y
+    era imposible saber si un aviso había salido. Ahora quien envía informa
+    del resultado.
+    """
     reminder = VacationReminder(
         EmployeeId=employee_id,
         ReminderDate=date.today(),
@@ -152,7 +161,9 @@ def create_reminder(db: Session, employee_id: int, reminder_type: str,
         EmailTo=email_to,
         EmailSubject=subject,
         EmailBody=body,
-        Status="pending",
+        Status=status,
+        SentAt=sent_at,
+        ErrorMessage=(error or "")[:500] or None,
     )
     db.add(reminder)
     db.commit()
@@ -192,6 +203,9 @@ def get_reminders(db: Session, page: int = 1, page_size: int = 100):
             "EmailSubject": r.EmailSubject,
             "SentAt": r.SentAt,
             "Status": r.Status,
+            # Motivo del fallo, para que en pantalla se pueda ver POR QUE no
+            # salio un correo en vez de solo que no salio.
+            "ErrorMessage": r.ErrorMessage,
             "CreatedAt": r.CreatedAt,
             "TotalPending": float(balance.TotalPending) if balance else 0,
             "PendingByYear": float(balance.PendingByYear) if balance else 0,
